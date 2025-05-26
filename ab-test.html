@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Genymotion A/B Testing</title>
+    <meta http-equiv="content-type" content="text/html;charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@genymotion/device-web-player@4.1.4/dist/css/device-renderer.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/@genymotion/device-web-player@4.1.4/dist/js/device-renderer.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        margin: 0;
+        background: #000;
+        font-family: "Roboto", sans-serif;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        height: 64px;
+        padding: 10px 0;
+        background-color: #1e1e1e;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      #logo {
+        height: 100%;
+        background-size: contain;
+        background-position: center center;
+        background-repeat: no-repeat;
+        background-image: url("./logo.png");
+      }
+      #test-title {
+        color: white;
+        font-size: 24px;
+        margin: 0;
+        padding: 0 20px;
+      }
+
+      #error {
+        font-family: "Roboto", sans-serif;
+        display: flex;
+        align-items: center;
+        background-color: #ef9a9a;
+        color: black;
+        border-radius: 4px;
+        padding: 10px;
+        box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+        margin: 10px;
+      }
+
+      #error.no-error {
+        display: none;
+      }
+
+      #error .error-icon {
+        font-size: 24px;
+        margin-right: 10px;
+      }
+
+      #error .error-content {
+        flex-grow: 1;
+      }
+
+      #devices {
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+        padding: 20px;
+        flex: 1;
+        min-height: 0;
+      }
+
+      .device {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        max-width: 50%;
+        color: #fff;
+        font-size: 14px;
+      }
+
+      .device .device-renderer {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+      }
+
+      .device .device-renderer.wsError::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #000000dd;
+        z-index: 1;
+      }
+
+      .device .gm-toolbars {
+        display: none;
+      }
+
+      .device .deviceLabel {
+        padding: 10px;
+        background: #1e1e1e;
+        border-radius: 4px;
+        margin-top: 10px;
+        text-align: center;
+        font-size: 24px;
+        font-weight: bold;
+        flex-shrink: 0;
+      }
+
+      .device .instancePlayer {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .device .instancePlayer .gm-wrapper {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .device .instancePlayer .gm-video-wrapper {
+        background: #252525;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+      }
+
+      .device .instancePlayer .device-renderer {
+        padding: 0;
+        height: 100%;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .device .instancePlayer .gm-video {
+        margin-right: 0;
+        height: 100%;
+        width: 100%;
+        object-fit: contain;
+      }
+
+      .device .instancePlayer .gm-click-to-unmute {
+        left: calc(50% - 152px);
+        top: calc(86% - 75px);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div id="logo"></div>
+      <h1 id="test-title">A/B Test</h1>
+    </header>
+
+    <div id="error" class="no-error">
+      <span class="error-icon">⚠</span>
+      <div class="error-content">Error loading devices. Please check your tokens and instance IDs.</div>
+    </div>
+
+    <div id="devices"></div>
+
+    <script>
+      const {DeviceRendererFactory} = window.genyDeviceWebPlayer;
+      const factory = new DeviceRendererFactory();
+      const url = new URL(window.location.href);
+      const baseUrl = "https://api-staging.geny.io/cloud";
+
+      // Get parameters from URL
+      const leftId = url.searchParams.get("left_id");
+      const leftToken = url.searchParams.get("left_token");
+      const rightId = url.searchParams.get("right_id");
+      const rightToken = url.searchParams.get("right_token");
+      const testTitle = url.searchParams.get("title") || "A/B Test";
+
+      document.addEventListener("DOMContentLoaded", init);
+
+      function showError(shouldShowError) {
+        const errorDiv = document.querySelector("#error");
+        if (shouldShowError) {
+          errorDiv.classList.remove("no-error");
+        } else {
+          errorDiv.classList.add("no-error");
+        }
+      }
+
+      async function createAccessTokenRequest(uuid, token) {
+        return fetch(
+          baseUrl + "/v1/instances/access-token",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-token": token
+            },
+            body: JSON.stringify({
+              instance_uuid: uuid
+            }),
+          }
+        );
+      }
+
+      async function getInstanceDetails(uuid, token) {
+        const response = await fetch(
+          baseUrl + "/v1/instances/" + uuid,
+          {
+            method: "GET",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-token": token
+            }
+          }
+        );
+
+        if (response.status !== 200) {
+          console.error(`Failed to get instance details: ${response.status} ${response.statusText}`);
+          throw new Error(`Failed to get instance details: ${response.status} ${response.statusText}`);
+        }
+
+        return response;
+      }
+
+      async function init() {
+        if (!leftId || !leftToken || !rightId || !rightToken) {
+          showError(true);
+          return;
+        }
+
+        // Set the test title
+        document.getElementById("test-title").textContent = testTitle;
+
+        const devices = [
+          { id: leftId, token: leftToken, position: "left", label: "A" },
+          { id: rightId, token: rightToken, position: "right", label: "B" }
+        ];
+
+        for (const device of devices) {
+          try {
+            const [instanceResponse, tokenResponse] = await Promise.all([
+              getInstanceDetails(device.id, device.token),
+              createAccessTokenRequest(device.id, device.token)
+            ]);
+
+            if (instanceResponse.status !== 200 || tokenResponse.status !== 200) {
+              showError(true);
+              return;
+            }
+
+            const instance = await instanceResponse.json();
+            const { access_token } = await tokenResponse.json();
+
+            createDeviceElement(device.position, device.label, instance, access_token);
+          } catch (error) {
+            console.error("Error loading device:", error);
+            showError(true);
+          }
+        }
+      }
+
+      function createDeviceElement(position, label, instance, accessToken) {
+        const container = document.createElement("div");
+        container.classList.add("device");
+        container.id = `device-${position}`;
+
+        const playerDiv = document.createElement("div");
+        playerDiv.classList.add("instancePlayer");
+
+        const labelDiv = document.createElement("div");
+        labelDiv.classList.add("deviceLabel");
+        labelDiv.textContent = label;
+
+        container.appendChild(playerDiv);
+        container.appendChild(labelDiv);
+        document.getElementById("devices").appendChild(container);
+
+        const options = {
+          template: "renderer",
+          token: accessToken,
+          fileUpload: false,
+        };
+
+        const player = factory.setupRenderer(
+          playerDiv,
+          instance.webrtc_url,
+          options
+        );
+
+        window.addEventListener("beforeunload", function () {
+          player.VM_communication.disconnect();
+        });
+      }
+    </script>
+  </body>
+</html>
